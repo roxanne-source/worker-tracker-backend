@@ -71,7 +71,7 @@ app.post("/api/location", (req, res) => {
   // shape it arrives in.
   const b = raw.location || (Array.isArray(raw.locations) ? raw.locations[0] : null) || raw;
 
-  const id = b.device_id || b.tid || b.topic || b.uuid || "unknown-device";
+  const id = b.device_id || b.extras?.device_id || b.tid || b.topic || b.uuid || "unknown-device";
   const lat = b.lat ?? b.coords?.latitude;
   const lng = (b.lng ?? b.lon) ?? b.coords?.longitude;
   const accuracy = b.accuracy ?? b.acc ?? b.coords?.accuracy;
