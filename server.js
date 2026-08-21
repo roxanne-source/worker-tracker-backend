@@ -48,40 +48,53 @@ function computeStatus(d) {
 }
 
 // --- Ingest endpoint -----------------------------------------------
-// Accepts either:
+// Accepts several shapes so different clients can point straight at
+// this endpoint without extra glue code:
 //  1) Our own simple format:      { device_id, lat, lng, battery, accuracy }
 //  2) OwnTracks' native format:   { _type: "location", tid, lat, lon, batt, acc, tst }
-// so you can literally point the OwnTracks app at this URL right now
-// (Settings > Connection > Mode: HTTP, Host: your-server, Port, Path: /api/location)
+//  3) react-native-background-geolocation's default format:
+//       { location: { coords: { latitude, longitude, accuracy }, battery: { level }, uuid, timestamp } }
+//     (or the top-level body itself shaped like that "location" object,
+//     depending on SDK version/config)
 app.post("/api/location", (req, res) => {
-  const b = req.body || {};
-  console.log("Received /api/location:", JSON.stringify(b));
+  const raw = req.body || {};
+  console.log("Received /api/location:", JSON.stringify(raw));
 
   // OwnTracks also sends non-location messages (e.g. "_type":"status" with
   // battery/permission info, no coordinates). We just acknowledge those
   // without treating them as an error.
-  if (b._type && b._type !== "location") {
+  if (raw._type && raw._type !== "location") {
     return res.status(200).json([]);
   }
 
-  const id = b.device_id || b.tid || b.topic || "unknown-device";
-  const lat = b.lat;
-  const lng = b.lng ?? b.lon;
+  // Unwrap react-native-background-geolocation's envelope, whichever
+  // shape it arrives in.
+  const b = raw.location || (Array.isArray(raw.locations) ? raw.locations[0] : null) || raw;
+
+  const id = b.device_id || b.tid || b.topic || b.uuid || "unknown-device";
+  const lat = b.lat ?? b.coords?.latitude;
+  const lng = (b.lng ?? b.lon) ?? b.coords?.longitude;
+  const accuracy = b.accuracy ?? b.acc ?? b.coords?.accuracy;
+
+  let battery = b.battery ?? b.batt ?? null;
+  if (battery == null && typeof b.battery_level === "number") battery = Math.round(b.battery_level * 100);
+  if (battery == null && typeof b.battery?.level === "number") battery = Math.round(b.battery.level * 100);
 
   if (typeof lat !== "number" || typeof lng !== "number") {
-    return res.status(400).json({ error: "lat and lng (or lon) are required numbers" });
+    return res.status(400).json({ error: "lat and lng (or lon, or coords.latitude/longitude) are required numbers" });
   }
 
   upsertDevice(id, {
     lat,
     lng,
-    battery: b.battery ?? b.batt ?? null,
-    accuracy: b.accuracy ?? b.acc ?? null,
+    battery,
+    accuracy: accuracy ?? null,
     ts: Date.now(),
     lastHeartbeat: Date.now(),
   });
 
-  // OwnTracks expects a 200 with a JSON array back (can be empty).
+  // OwnTracks expects a 200 with a JSON array back (can be empty);
+  // react-native-background-geolocation just needs any 2xx response.
   res.status(200).json([]);
 });
 
