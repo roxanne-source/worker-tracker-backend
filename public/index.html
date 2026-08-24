@@ -49,7 +49,9 @@
       list.forEach(d => {
         if (typeof d.lat !== 'number' || typeof d.lng !== 'number') return;
         const color = colors[d.status] || colors.unknown;
-        const label = `<b>${d.id}</b><br>Status: ${d.status}<br>` +
+        const title = d.name ? `${d.name}` : d.id;
+        const subtitle = d.name ? `<br><span style="color:#888;font-size:11px">${d.id}</span>` : '';
+        const label = `<b>${title}</b>${subtitle}<br>Status: ${d.status}<br>` +
                       (d.battery != null ? `Battery: ${d.battery}%<br>` : '') +
                       (d.ts ? `Last update: ${new Date(d.ts).toLocaleTimeString()}` : '');
 
