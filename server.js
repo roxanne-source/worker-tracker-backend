@@ -72,6 +72,7 @@ app.post("/api/location", (req, res) => {
   const b = raw.location || (Array.isArray(raw.locations) ? raw.locations[0] : null) || raw;
 
   const id = b.device_id || b.extras?.device_id || b.tid || b.topic || b.uuid || "unknown-device";
+  const name = b.device_name || b.extras?.device_name || null;
   const lat = b.lat ?? b.coords?.latitude;
   const lng = (b.lng ?? b.lon) ?? b.coords?.longitude;
   const accuracy = b.accuracy ?? b.acc ?? b.coords?.accuracy;
@@ -96,14 +97,19 @@ app.post("/api/location", (req, res) => {
     return res.status(400).json({ error: "lat and lng (or lon, or coords.latitude/longitude) are required numbers" });
   }
 
-  upsertDevice(id, {
+  const patch = {
     lat,
     lng,
     battery,
     accuracy: accuracy ?? null,
     ts: Date.now(),
     lastHeartbeat: Date.now(),
-  });
+  };
+  // Only update the stored name if a real (non-empty) one was sent —
+  // an empty string shouldn't erase a name set on an earlier ping.
+  if (name && name.trim()) patch.name = name.trim();
+
+  upsertDevice(id, patch);
 
   // OwnTracks expects a 200 with a JSON array back (can be empty);
   // react-native-background-geolocation just needs any 2xx response.
