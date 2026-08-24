@@ -10,30 +10,10 @@
 
 const express = require("express");
 const path = require("path");
-const admin = require("firebase-admin");
 
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
-
-// --- Firebase Admin setup (for sending wake-up pushes) ----------------
-// Needs a service account key from Firebase Console > Project Settings
-// > Service Accounts > Generate new private key. NEVER commit that file
-// to git — on Render, paste its full JSON content into an environment
-// variable named FIREBASE_SERVICE_ACCOUNT (Render dashboard > your
-// service > Environment). Locally, you can instead save it as
-// serviceAccountKey.json in this folder (also .gitignored).
-let firebaseReady = false;
-try {
-  const serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT
-    ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
-    : require("./serviceAccountKey.json"); // local dev fallback, gitignored
-  admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
-  firebaseReady = true;
-  console.log("Firebase Admin initialized — wake-up pushes enabled.");
-} catch (e) {
-  console.log("Firebase Admin NOT initialized (no service account found) — wake-up pushes disabled.", e.message);
-}
 
 // --- In-memory store -------------------------------------------------
 // For "get it working now" this lives in RAM. Swap this object for a
@@ -145,52 +125,6 @@ app.post("/api/heartbeat", (req, res) => {
 app.get("/api/devices", (req, res) => {
   res.json(getAllDevices());
 });
-
-// --- Push token registration -----------------------------------------
-// The app calls this once on startup (and whenever Firebase rotates
-// its token) so we know WHERE to send a wake-up push for this device.
-app.post("/api/register-token", (req, res) => {
-  const { device_id, fcm_token } = req.body || {};
-  if (!device_id || !fcm_token) {
-    return res.status(400).json({ error: "device_id and fcm_token are required" });
-  }
-  upsertDevice(device_id, { fcmToken: fcm_token });
-  console.log(`Registered push token for ${device_id}`);
-  res.json({ ok: true });
-});
-
-// --- Wake-up push logic ------------------------------------------------
-// Runs periodically: for any device that has gone STALE (per the same
-// online/stale/offline logic the map uses) and that we haven't already
-// pinged recently, send a silent data-only push. The app's background
-// message handler (see index.js in the app project) wakes up just
-// enough to grab a fresh location and send it through the normal
-// pipeline — this is the actual "server pings the phone" mechanism.
-const PING_COOLDOWN_MS = 3 * 60 * 1000; // don't re-ping the same device more than once per 3 min
-
-async function checkStaleDevicesAndPing() {
-  if (!firebaseReady) return;
-
-  const now = Date.now();
-  for (const [id, d] of Object.entries(devices)) {
-    if (!d.fcmToken) continue;
-    if (computeStatus(d) !== "stale") continue; // only nudge devices that just went quiet, not ones already offline for a long time
-    if (d.lastPingSent && now - d.lastPingSent < PING_COOLDOWN_MS) continue;
-
-    try {
-      await admin.messaging().send({
-        token: d.fcmToken,
-        data: { type: "wake_up_request" }, // data-only = silent, no visible notification
-        android: { priority: "high" },
-      });
-      upsertDevice(id, { lastPingSent: now });
-      console.log(`Sent wake-up push to ${id}`);
-    } catch (e) {
-      console.log(`Wake-up push to ${id} failed: ${e.message}`);
-    }
-  }
-}
-setInterval(checkStaleDevicesAndPing, 30 * 1000); // check every 30 sec
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
