@@ -35,7 +35,7 @@ function getAllDevices() {
 // Traccar. Instead of one vague flag, we compute status from *time
 // since last contact*, and we separate "we heard from the phone at all"
 // (heartbeat) from "we have a fresh GPS fix" (location).
-const ONLINE_MS = 2 * 60 * 1000;   // heard from within 2 min -> online
+const ONLINE_MS = 3 * 60 * 1000;   // heard from within 3 min -> online (gives buffer for the ~1-2 min stopTimeout+heartbeat transition after movement stops)
 const STALE_MS = 10 * 60 * 1000;   // heard from within 10 min -> stale
 // anything older than STALE_MS -> offline
 
