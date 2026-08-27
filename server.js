@@ -132,6 +132,52 @@ app.get("/api/devices", (req, res) => {
   res.json(getAllDevices());
 });
 
+// --- Task acknowledgment -----------------------------------------------
+// A separate, explicit "I acknowledge this task, here's my location
+// right now" event, distinct from routine background tracking pings.
+// Kept as its own list (not overwriting device history) so you have a
+// clear record of when/where each worker acknowledged.
+const acknowledgments = []; // { device_id, device_name, lat, lng, battery, ts }
+
+app.post("/api/acknowledge", (req, res) => {
+  const b = req.body || {};
+  const { device_id, lat, lng } = b;
+
+  if (!device_id || typeof lat !== "number" || typeof lng !== "number") {
+    return res.status(400).json({ error: "device_id, lat, and lng are required" });
+  }
+
+  const record = {
+    device_id,
+    device_name: b.device_name || null,
+    lat,
+    lng,
+    battery: typeof b.battery === "number" ? b.battery : null,
+    ts: b.ts || Date.now(),
+  };
+  acknowledgments.push(record);
+  console.log(`Task acknowledged by ${b.device_name || device_id} at ${lat}, ${lng}`);
+
+  // Also update the device's live position/status on the map, same as
+  // a normal tracking ping, since an acknowledgment IS a fresh, real
+  // location reading.
+  upsertDevice(device_id, {
+    lat,
+    lng,
+    battery: record.battery,
+    ts: Date.now(),
+    lastHeartbeat: Date.now(),
+    ...(record.device_name ? { name: record.device_name } : {}),
+  });
+
+  res.json({ ok: true });
+});
+
+// See the full acknowledgment history (most recent first).
+app.get("/api/acknowledgments", (req, res) => {
+  res.json([...acknowledgments].reverse());
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Worker tracker server running on http://localhost:${PORT}`);
