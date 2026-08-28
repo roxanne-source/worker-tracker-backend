@@ -16,19 +16,15 @@
   .legend div { margin: 4px 0; display: flex; align-items: center; gap: 6px; }
   .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
   .online { background: #22c55e; }
-  .stale { background: #f59e0b; }
-  .offline { background: #ef4444; }
-  .unknown { background: #9ca3af; }
+  .idle { background: #15803d; }
 </style>
 </head>
 <body>
 <div id="map"></div>
 <div class="legend">
   <strong>Status</strong>
-  <div><span class="dot online"></span> Online (&lt; 2 min)</div>
-  <div><span class="dot stale"></span> Stale (2&ndash;10 min)</div>
-  <div><span class="dot offline"></span> Offline (&gt; 10 min)</div>
-  <div><span class="dot unknown"></span> Never reported</div>
+  <div><span class="dot online"></span> Online (&lt; 5 min)</div>
+  <div><span class="dot idle"></span> Idle (&ge; 5 min)</div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -38,7 +34,7 @@
     attribution: '&copy; OpenStreetMap contributors'
   }).addTo(map);
 
-  const colors = { online: '#22c55e', stale: '#f59e0b', offline: '#ef4444', unknown: '#9ca3af' };
+  const colors = { online: '#22c55e', idle: '#15803d' };
   const markers = {}; // device id -> Leaflet marker
 
   async function refresh() {
@@ -48,7 +44,7 @@
 
       list.forEach(d => {
         if (typeof d.lat !== 'number' || typeof d.lng !== 'number') return;
-        const color = colors[d.status] || colors.unknown;
+        const color = colors[d.status] || colors.idle;
         const title = d.name ? `${d.name}` : d.id;
         const subtitle = d.name ? `<br><span style="color:#888;font-size:11px">${d.id}</span>` : '';
         const label = `<b>${title}</b>${subtitle}<br>Status: ${d.status}<br>` +
