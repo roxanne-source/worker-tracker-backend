@@ -32,19 +32,16 @@ function getAllDevices() {
 
 // --- Status logic ------------------------------------------------------
 // This is the fix for the "unknown/offline" problem you mentioned with
-// Traccar. Instead of one vague flag, we compute status from *time
-// since last contact*, and we separate "we heard from the phone at all"
-// (heartbeat) from "we have a fresh GPS fix" (location).
-const ONLINE_MS = 3 * 60 * 1000;   // heard from within 3 min -> online (gives buffer for the ~1-2 min stopTimeout+heartbeat transition after movement stops)
-const STALE_MS = 10 * 60 * 1000;   // heard from within 10 min -> stale
-// anything older than STALE_MS -> offline
+// Simplified to two states: online if we've heard from the phone
+// recently, idle otherwise — this stays idle indefinitely until a
+// fresh update comes in, no separate "offline" tier. A device that has
+// never reported at all is also shown as idle for simplicity.
+const ONLINE_MS = 5 * 60 * 1000; // heard from within 5 min -> online, otherwise idle
 
 function computeStatus(d) {
-  if (!d || !d.lastHeartbeat) return "unknown"; // never reported at all
+  if (!d || !d.lastHeartbeat) return "idle"; // never reported at all
   const age = Date.now() - d.lastHeartbeat;
-  if (age <= ONLINE_MS) return "online";
-  if (age <= STALE_MS) return "stale";
-  return "offline";
+  return age <= ONLINE_MS ? "online" : "idle";
 }
 
 // --- Ingest endpoint -----------------------------------------------
