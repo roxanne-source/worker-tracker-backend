@@ -218,7 +218,7 @@ app.post("/api/register-token", (req, res) => {
 // app timers (heartbeat) proved unreliable once a device goes fully
 // idle/backgrounded on this test device, even with every standard and
 // advanced Android fix applied.
-const PING_COOLDOWN_MS = 3 * 60 * 1000; // don't re-ping the same device more than once per 3 min
+const PING_COOLDOWN_MS = 10 * 60 * 1000; // don't re-ping the same device more than once per 3 min
 
 async function checkIdleDevicesAndPing() {
   if (!firebaseReady) return;
