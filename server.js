@@ -73,6 +73,11 @@ function computeStatus(d) {
 //       { location: { coords: { latitude, longitude, accuracy }, battery: { level }, uuid, timestamp } }
 //     (or the top-level body itself shaped like that "location" object,
 //     depending on SDK version/config)
+//
+// As of the Traccar switch, this is no longer the REAL destination for
+// location data (Traccar is) — but the app still mirrors every reading
+// here too, purely so these logs show real lat/lng and so
+// lastHeartbeat stays fresh for the wake-up logic further down.
 app.post("/api/location", (req, res) => {
   const raw = req.body || {};
   console.log("Received /api/location:", JSON.stringify(raw));
@@ -208,6 +213,51 @@ app.post("/api/register-token", (req, res) => {
   res.json({ ok: true });
 });
 
+// --- Task-assignment notification -----------------------------------
+// Called by the website whenever a task is assigned to a worker. This
+// is the one thing the website needs to know about this backend — no
+// Firebase code or credentials needed on their side at all, they just
+// tell us "notify this worker," and we handle the actual push.
+//
+// device_id should be the worker's employee code — the same value
+// the app registers under via /api/register-token, so this looks it
+// up in the same devices store.
+app.post("/api/notify-task", async (req, res) => {
+  if (!firebaseReady) {
+    return res.status(503).json({ error: "Push notifications are not configured on this server." });
+  }
+
+  const { device_id, title, body } = req.body || {};
+  if (!device_id) {
+    return res.status(400).json({ error: "device_id is required" });
+  }
+
+  const device = devices[device_id];
+  if (!device || !device.fcmToken) {
+    // This worker's phone hasn't registered a push token — either
+    // they've never opened the app, or this server restarted recently
+    // and lost it (see the note at the top about in-memory storage).
+    return res.status(404).json({ error: "No push token registered for this device_id" });
+  }
+
+  try {
+    await admin.messaging().send({
+      token: device.fcmToken,
+      data: {
+        type: "task_assigned",
+        title: title || "You've received a task",
+        body: body || "Open the app to view details.",
+      },
+      android: { priority: "high" },
+    });
+    console.log(`Sent task-assignment push to ${device_id}`);
+    res.json({ ok: true });
+  } catch (e) {
+    console.log(`Task-assignment push to ${device_id} failed: ${e.message}`);
+    res.status(500).json({ error: "Failed to send push", detail: e.message });
+  }
+});
+
 // --- Wake-up push logic ------------------------------------------------
 // Runs periodically: for any device that has gone IDLE (per the same
 // online/idle logic the map uses) and that we haven't already pinged
@@ -218,7 +268,7 @@ app.post("/api/register-token", (req, res) => {
 // app timers (heartbeat) proved unreliable once a device goes fully
 // idle/backgrounded on this test device, even with every standard and
 // advanced Android fix applied.
-const PING_COOLDOWN_MS = 10 * 60 * 1000; // don't re-ping the same device more than once per 3 min
+const PING_COOLDOWN_MS = 10 * 60 * 1000; // don't re-ping the same device more than once per 10 min
 
 async function checkIdleDevicesAndPing() {
   if (!firebaseReady) return;
