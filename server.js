@@ -11,6 +11,18 @@
 const express = require("express");
 const path = require("path");
 const admin = require("firebase-admin");
+const Sentry = require("@sentry/node");
+const { Redis } = require("@upstash/redis");
+
+// --- Sentry setup (server-side logging) -------------------------------
+// Reuses the same Sentry project the mobile app already reports to, so
+// everything lives in one dashboard. Every event from here is tagged
+// "backend" so it's easy to tell apart from app-side events.
+Sentry.init({
+  dsn: "https://5af9e491de88145ce4c9f02dc8193d45@o4512031287017472.ingest.us.sentry.io/4512031775719424",
+  tracesSampleRate: 0.1,
+});
+Sentry.setTag("service", "worker-tracker-backend");
 
 const app = express();
 app.use(express.json());
@@ -33,17 +45,75 @@ try {
   console.log("Firebase Admin initialized — wake-up pushes enabled.");
 } catch (e) {
   console.log("Firebase Admin NOT initialized (no service account found) — wake-up pushes disabled.", e.message);
+  Sentry.captureException(e, { extra: { context: "firebase-admin-init" } });
+}
+
+// --- Redis setup (persistent storage) ---------------------------------
+// Render's free tier has an ephemeral filesystem AND ephemeral memory —
+// every restart wipes both. Upstash Redis is a small, separate, always-
+// on database that survives those restarts. If it's not configured yet
+// (env vars missing), the server still runs fine on plain memory alone,
+// same as before — it just won't survive a restart, exactly like it
+// didn't before this change.
+let redisReady = false;
+let redis = null;
+try {
+  if (process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN) {
+    redis = new Redis({
+      url: process.env.UPSTASH_REDIS_REST_URL,
+      token: process.env.UPSTASH_REDIS_REST_TOKEN,
+    });
+    redisReady = true;
+    console.log("Redis persistence enabled.");
+  } else {
+    console.log("Redis persistence NOT enabled (missing UPSTASH_REDIS_REST_URL/TOKEN) — device data will not survive restarts.");
+  }
+} catch (e) {
+  console.log("Redis initialization failed:", e.message);
+  Sentry.captureException(e, { extra: { context: "redis-init" } });
 }
 
 // --- In-memory store -------------------------------------------------
-// For "get it working now" this lives in RAM. Swap this object for a
-// real database (Postgres, SQLite, etc.) once you move past the demo
-// stage -- the rest of the code doesn't need to change, just these
-// three functions.
+// Still the fast, primary copy the rest of this file reads from — but
+// now it's a CACHE backed by Redis, not the only copy. Restored from
+// Redis on startup (see loadDevicesFromRedis below), and every change
+// is mirrored to Redis in the background.
 const devices = {}; // deviceId -> { lat, lng, ts, battery, acc, lastHeartbeat }
 
 function upsertDevice(id, patch) {
   devices[id] = { ...(devices[id] || {}), ...patch };
+
+  if (redisReady) {
+    // Fire-and-forget — never let a slow/failed Redis write block or
+    // break whatever the caller is doing (registering a token,
+    // recording a location, etc).
+    redis.hset("devices", { [id]: JSON.stringify(devices[id]) }).catch((e) => {
+      console.log(`Redis write failed for ${id}: ${e.message}`);
+      Sentry.captureException(e, { extra: { context: "redis-write", id } });
+    });
+  }
+}
+
+async function loadDevicesFromRedis() {
+  if (!redisReady) return;
+  try {
+    const stored = await redis.hgetall("devices");
+    if (stored) {
+      let count = 0;
+      for (const [id, json] of Object.entries(stored)) {
+        try {
+          devices[id] = JSON.parse(json);
+          count++;
+        } catch (e) {
+          // One corrupted entry shouldn't block restoring the rest.
+        }
+      }
+      console.log(`Restored ${count} device(s) from Redis.`);
+    }
+  } catch (e) {
+    console.log(`Failed to load devices from Redis: ${e.message}`);
+    Sentry.captureException(e, { extra: { context: "redis-load" } });
+  }
 }
 
 function getAllDevices() {
@@ -80,7 +150,6 @@ function computeStatus(d) {
 // lastHeartbeat stays fresh for the wake-up logic further down.
 app.post("/api/location", (req, res) => {
   const raw = req.body || {};
-  console.log("Received /api/location:", JSON.stringify(raw));
 
   // OwnTracks also sends non-location messages (e.g. "_type":"status" with
   // battery/permission info, no coordinates). We just acknowledge those
@@ -118,6 +187,11 @@ app.post("/api/location", (req, res) => {
   if (typeof lat !== "number" || typeof lng !== "number") {
     return res.status(400).json({ error: "lat and lng (or lon, or coords.latitude/longitude) are required numbers" });
   }
+
+  // A clean, one-line summary — device id (the employee code) followed
+  // by lat/lng — so this is easy to scan at a glance among the other
+  // log lines, instead of a full raw JSON dump.
+  console.log(`Location: ${id} lat=${lat} lng=${lng}`);
 
   const patch = {
     lat,
@@ -235,8 +309,9 @@ app.post("/api/notify-task", async (req, res) => {
   const device = devices[device_id];
   if (!device || !device.fcmToken) {
     // This worker's phone hasn't registered a push token — either
-    // they've never opened the app, or this server restarted recently
-    // and lost it (see the note at the top about in-memory storage).
+    // they've never opened the app, or (much less likely now that
+    // Redis persistence is in place) this server restarted recently
+    // and hasn't heard from that phone again yet.
     return res.status(404).json({ error: "No push token registered for this device_id" });
   }
 
@@ -254,6 +329,7 @@ app.post("/api/notify-task", async (req, res) => {
     res.json({ ok: true });
   } catch (e) {
     console.log(`Task-assignment push to ${device_id} failed: ${e.message}`);
+    Sentry.captureException(e, { extra: { context: "notify-task", device_id } });
     res.status(500).json({ error: "Failed to send push", detail: e.message });
   }
 });
@@ -289,12 +365,18 @@ async function checkIdleDevicesAndPing() {
       console.log(`Sent wake-up push to ${id}`);
     } catch (e) {
       console.log(`Wake-up push to ${id} failed: ${e.message}`);
+      Sentry.captureException(e, { extra: { context: "wake-up-push", id } });
     }
   }
 }
 setInterval(checkIdleDevicesAndPing, 30 * 1000); // check every 30 sec
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Worker tracker server running on http://localhost:${PORT}`);
+
+// Restore devices from Redis BEFORE accepting any requests, so nothing
+// hits an empty store right after a restart.
+loadDevicesFromRedis().then(() => {
+  app.listen(PORT, () => {
+    console.log(`Worker tracker server running on http://localhost:${PORT}`);
+  });
 });
