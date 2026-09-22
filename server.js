@@ -126,7 +126,12 @@ function getAllDevices() {
 // recently, idle otherwise — this stays idle indefinitely until a
 // fresh update comes in, no separate "offline" tier. A device that has
 // never reported at all is also shown as idle for simplicity.
-const ONLINE_MS = 5 * 60 * 1000; // heard from within 5 min -> online, otherwise idle
+//
+// Set comfortably above the app's actual 10-minute reporting interval
+// — anything close to 10 minutes would cause devices to flicker
+// between "online" and "idle" on every single normal reporting cycle,
+// even while working perfectly.
+const ONLINE_MS = 15 * 60 * 1000; // heard from within 15 min -> online, otherwise idle
 
 function computeStatus(d) {
   if (!d || !d.lastHeartbeat) return "idle"; // never reported at all
@@ -282,6 +287,27 @@ app.post("/api/register-token", (req, res) => {
   if (!device_id || !fcm_token) {
     return res.status(400).json({ error: "device_id and fcm_token are required" });
   }
+
+  // A push token belongs to the physical phone, not whoever's logged
+  // in — so if this EXACT token was previously registered under a
+  // DIFFERENT device_id, that's the same phone under an old identity
+  // (someone logged out and into a different account, most likely).
+  // Clean up the stale entry now, otherwise it lingers forever: still
+  // shown as idle, still pointlessly pinged for wake-up pushes, never
+  // getting a real location update again.
+  for (const [existingId, existingDevice] of Object.entries(devices)) {
+    if (existingId !== device_id && existingDevice.fcmToken === fcm_token) {
+      delete devices[existingId];
+      if (redisReady) {
+        redis.hdel("devices", existingId).catch((e) => {
+          console.log(`Redis delete failed for stale ${existingId}: ${e.message}`);
+          Sentry.captureException(e, { extra: { context: "redis-delete-stale", existingId } });
+        });
+      }
+      console.log(`Removed stale device ${existingId} (same push token as new ${device_id})`);
+    }
+  }
+
   upsertDevice(device_id, { fcmToken: fcm_token });
   console.log(`Registered push token for ${device_id}`);
   res.json({ ok: true });
