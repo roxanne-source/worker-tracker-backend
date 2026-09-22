@@ -19,7 +19,7 @@ const { Redis } = require("@upstash/redis");
 // everything lives in one dashboard. Every event from here is tagged
 // "backend" so it's easy to tell apart from app-side events.
 Sentry.init({
-  dsn: "https://5af9e491de88145ce4c9f02dc8193d45@o4512031287017472.ingest.us.sentry.io/4512031775719424",
+  dsn: "https://1b45c58e6c7f44c54ddae4679cebb5ee@o4512061017358336.ingest.us.sentry.io/4512061017554944",
   tracesSampleRate: 0.1,
 });
 Sentry.setTag("service", "worker-tracker-backend");
